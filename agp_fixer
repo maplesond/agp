@@ -1,0 +1,130 @@
+#!/usr/bin/perl
+
+# Program: fasta_to_agp.pl 
+# Purpose: Create broken contigs from a FASTA file of scaffolds and an AGP describing the mapping. 
+#	   Assumes input scaffold file contains headers ending in "_scaffold_<index>" 	
+# Authors: Richard Leggett, Mario Caccamo, based on abyss-fatoagp by Shaun Jackman
+
+use strict;
+use Getopt::Long;
+
+my $input_file;
+my $contig_file;
+my $agp_file;
+my $contig_n=0;
+my $scaffold_n=0;
+my $min_n=11;
+my $help_requested;
+
+&GetOptions(
+'a|agp:s'         => \$agp_file,
+'c|contigs:s'     => \$contig_file,
+'h|help'          => \$help_requested,
+'i|input:s'       => \$input_file,
+'n|min_n:i'       => \$min_n,
+);
+
+if (defined $help_requested) {
+    show_help();
+    exit;
+}
+
+die "You must specify a -input parameter\n" if not defined $input_file;
+die "You must specify a -contigs parameter\n" if not defined $contig_file;
+die "You must specify a -agp parameter\n" if not defined $agp_file;
+
+open(INPUTFILE, $input_file) or die "Can't open input file $input_file\n";
+open(CONTIGFILE, ">".$contig_file) or die "Can't open output file $contig_file\n";
+open(AGPFILE, ">".$agp_file) or die "Can't open output file $agp_file\n";
+
+my $current_id = "";
+my $current_contig = "";
+
+while (<INPUTFILE>) {
+    chomp(my $line = $_);
+    if ($_ =~ /^>(\S+)/) {
+        if ($current_contig ne "") {
+            process_object($current_id, $current_contig);
+        }
+        $current_contig = "";
+        $current_id = $1;
+    } else {
+        $current_contig .= $line;
+    }
+}
+
+if ($current_contig ne "") {
+    process_object($current_id, $current_contig);
+}
+
+close(AGPFILE);
+close(CONTIGFILE);
+close(INPUTFILE);
+
+
+print "DONE.\n";
+
+sub process_object
+{
+    my $scaf_id = $_[0];
+    my $scaf_seq = $_[1];    
+    my $scaf_len = length($scaf_seq);
+
+    my @parts = split('_', $scaf_id);
+    my $parts_size = @parts;
+    my $scaffold_n = $parts[-1];
+
+    my $stem = join('_', @parts[0..$parts_size-3]);
+        
+    my @contig_seqs = split /([Nn]{$min_n,})/, $scaf_seq;
+    my $line_number = 1;
+    my $position = 1;
+    for my $contig_seq (@contig_seqs) {
+        my $len = length($contig_seq);
+        
+	# Don't output anything of length 0!
+	if ($len > 0) {
+
+		# 20 is the ENA minimum contig length
+		if ($len < 20) {
+	        	print AGPFILE $scaf_id, "\t", $position, "\t", $position + $len - 1, "\t", $line_number, "\tN\t", $len, "\tscaffold\tyes\tpaired-ends\n";
+		}
+		else {
+			# object object_beg object_end part_number
+	        	print AGPFILE $scaf_id, "\t", $position, "\t", $position + $len - 1, "\t", $line_number, "\t";
+
+		        if ($contig_seq =~ /^[nN]/) {
+        		    # component_type gap_length gap_type linkage
+		            print AGPFILE "N\t", $len, "\tscaffold\tyes\tpaired-ends\n";
+        		} else {
+	        	    my $contig_id = $stem."_contig_".++$contig_n;
+
+	        	    # component_type component_id component_beg component_end orientation
+		            print AGPFILE "W\t", $contig_id, "\t1\t", $len, "\t+\n";
+        		    print CONTIGFILE '>', $contig_id, "\n", $contig_seq, "\n";
+		    }
+	        }
+	}
+        
+        $line_number++;
+        $position += $len;
+    }
+}
+
+sub show_help
+{
+    print "\n",
+          "Convert a FASTA file of scaffolds to a new FASTA file of scaffolds, a FASTA\n",
+          "file of contigs and an AGP file, adopting a standard naming convention.\n",
+          "\n",
+          "Usage: fasta_to_agp <-i filename> <-c filename> <-a filename>\n",
+          "                    [-t filename] [-n int]\n",
+          "\n",
+          "OPTIONS:\n",
+          "     -h | -help          show this message\n",
+          "     -i | -input         filename of input FASTA file\n",
+          "     -c | -contigs       filename of output contig FASTA file\n",
+          "     -a | -agp           filename of output AGP file\n",
+          "     -n | -min_n         minimum number of Ns to break sequence (default 10)\n",
+          "\n";
+}
